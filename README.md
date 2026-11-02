@@ -77,7 +77,7 @@ generate_data ─▶ train_random_forest ─▶ train_xgboost ─┬─▶ train
 | 10 | `python compare_rf_v1_v2.py` | 기본 | v1 vs v2 성적표 `reports/rf_v1_vs_v2.md` + 통과 판정(헛경보 50건 기준 잡은 사기 5% 넘게 감소 없음 · AP 하락 0.01 이내), 가맹점 번호만 바꿨을 때 확률 흔들림 비교 (2 · 9번 필요) |
 | 11 | `python export_ai_server_model.py --model models/random_forest_v2.joblib --version rf-v2 --cases ../ai-server/tests/fixtures/ml_golden.json` | 기본 | `exports/rf-v2.joblib`(압축 모델) · `exports/ml_golden_rf-v2.json`(golden 정답) — 팀 저장소 ai-server에 넣을 파일. 사례(대상 결제 · 이력)는 기존 golden에서 가져오고 정답만 이 모델로 다시 계산 (1 · 9번 필요, 팀 저장소 폴더 안에서 실행) |
 | 12 | `python tabformer_convert.py` | 기본 | 외부 데이터(IBM TabFormer) → `data/tabformer/transactions.csv` · `fraud_episodes.csv`. 기본: 고객 250명(seed 42) · 2015~2019년 · 1달러 1,300원 (아래 "외부 데이터" 절, 원본 필요) |
-| 13 | `python tabformer_scorecard.py` | 기본 | 외부 데이터 성적표 `reports/tabformer_scorecard.md` — Rule · RF(TabFormer로 학습, rf-v2와 같은 칸 · 설정) · RF + 지역 칸(확인 실험) · rf-v2(합성 학습 그대로)를 같은 헛경보 수에서 비교 (9 · 12번 필요) |
+| 13 | `python tabformer_scorecard.py` | 기본 | 외부 데이터 성적표 `reports/tabformer_scorecard.md` — Rule · RF(TabFormer로 학습, rf-v2와 같은 칸 · 설정) · RF + 지역 칸(확인 실험) · RF + 국가 A · B(Ⓥ3 국가 칸 정의 고르기, `country_features.py`) · rf-v2(합성 학습 그대로)를 같은 헛경보 수에서 비교 (9 · 12번 필요) |
 | 14 | `python shadow_scenarios.py` | 기본 | 돈워리 로컬 서버(팀 저장소 실행 중)에 정상 · 사기 시나리오 결제 50건을 보내고 정답 라벨 `data/shadow/scenario_labels.csv`를 남김. 서명 · 전송은 팀 저장소 `scripts/demo/cakeshop_pay.py`를 그대로 씀 (`--dry-run`으로 목록만 보기) |
 | 15 | `python shadow_export.py` → `python shadow_whatif.py --labels data/shadow/scenario_labels.csv` | 기본 | 만약 비교 `reports/shadow_whatif.md` — Shadow 기록(`sql/shadow_export.sql` 결과 CSV)으로 Rule × ML 일치표 · 직원 판정 · 시나리오 라벨 대조 · 기준값 바꿔 보기 · 국가 공백 · 같은 결제 rf-v1 ↔ rf-v2 (아래 "Shadow 만약 비교" 절) |
 
@@ -101,12 +101,13 @@ generate_data ─▶ train_random_forest ─▶ train_xgboost ─┬─▶ train
 - 출처: [IBM TabFormer](https://github.com/IBM/TabFormer)의 합성 카드 거래 데이터 (Apache 2.0). 2,000명 · 약 2,439만 건 · 사기 0.12%. IBM이 이 실험을 검토 · 보증한 것은 아닙니다
 - 받기: README가 안내하는 Box 링크(https://ibm.box.com/v/tabformer-data)에서 `transactions.tgz`를 받아 압축을 풀면 `card_transaction.v1.csv` 하나가 나옵니다 → `external/card_transaction.v1.csv`에 둡니다. GitHub Download ZIP은 Git LFS라 실제 파일 대신 작은 안내 파일만 들어올 수 있습니다
 - 라이선스 확인(11/02): 저장소 LICENSE가 Apache 2.0이고, 압축 파일 안에도 CSV 말고 다른 약관 파일이 없습니다. 원본 · 변환 결과는 이 저장소에 올리지 않습니다(`external/` · `data/` 제외)
-- 돈워리 칸으로 바꾸기: User → 고객, User + Card → 카드, 시각은 한국 시간으로 읽음(시간대 Feature가 밀리지 않게), 금액은 달러 × 환율 · 환불(음수) 제외, `Errors?`가 있으면 거절, 기기 · IP 정보는 없음(R02 · R05 · 기기 Feature 꺼짐). 가게가 있는 주(해외면 나라, 온라인은 ONLINE)를 `locationRef`로 남겨 "RF + 지역 칸" 확인 실험에만 씀 — 돈워리의 "평소와 다른 접속 국가"를 대신하는 칸이고 `features.py`는 바꾸지 않음
+- 돈워리 칸으로 바꾸기: User → 고객, User + Card → 카드, 시각은 한국 시간으로 읽음(시간대 Feature가 밀리지 않게), 금액은 달러 × 환율 · 환불(음수) 제외, `Errors?`가 있으면 거절, 기기 · IP 정보는 없음(R02 · R05 · 기기 Feature 꺼짐). 가게가 있는 주(해외면 나라, 온라인은 ONLINE)를 `locationRef`로 남겨 "RF + 지역 칸" 확인 실험에만 씀 — 돈워리의 "평소와 다른 접속 국가"를 대신하는 칸이고 `features.py`는 바꾸지 않음. Ⓥ3에서는 같은 칸을 국가 단위(미국 주 → US, 온라인 → 국가 없음)로 바꿔 A "처음 본 국가인가" · B "평소 국가와 다른가"를 비교하고, 고르는 규칙(Validation 기준 ③ 잡은 사기, 차이 3건 이하면 B)과 고른 쪽의 Test 한 번 결과를 성적표 "국가 칸 고르기" 절에 남김
 - 같은 카드의 사기가 7일 안에 이어지면 한 공격 묶음으로 봅니다 (학습 · 검증 구간에 나뉘어 들어가지 않게)
 - 결과 (11/02, `reports/tabformer_scorecard.md`, 검증 16만 건 · 사기 252건 · 사기율 0.16%)
   - 정상 1.96% 헛경보에서 잡은 사기: Rule 14 · RF(TabFormer로 학습) 47 · RF + 지역 칸 57 · rf-v2(합성 학습 그대로) 8. AP는 무작위 0.0016 대비 RF 0.0146 · RF + 지역 칸 0.0169 · rf-v2 0.0021
   - 해석: TabFormer의 사기는 "어디서 · 무슨 업종에서"(평소와 다른 주 · 해외 사기율 37배)로 드러나는데, 우리 12칸은 행동 이력만 봐서 약하다. rf-v2가 무작위 수준인 것은 합성 데이터가 우리 Feature가 잡는 신호로 사기를 만들었기 때문 — 합성 성적표의 "Rule 대비 약 3.8배"는 우리가 설계한 사기 시나리오 안에서만 맞는 결론
   - 장소 칸("앞서 이 장소에서 결제한 적 있나")은 조금 도움(+10건). 돈워리에 "평소와 다른 접속 국가" 칸을 넣을지는 더 현실적인 합성 데이터로 다시 학습하는 v3 때 다시 본다
+  - Ⓥ3 국가 칸 비교 (11/03): 장소를 국가 단위로 바꿔 비교한 결과 B "평소 국가와 다른가"를 고름. 정상 1.96% 헛경보에서 잡은 사기 A 51 · B 245/252, AP A 0.0359 · B 0.5080, Test 한 번 B 170/174 · AP 0.3875. TabFormer 사기가 해외 매장 결제에 몰린 합성 데이터라 크게 보이고, 온라인 결제(사기 9건)에서는 효과가 없음 → 돈워리(전부 온라인) 성능의 근거는 아님
 
 ### 돈워리 Shadow 만약 비교 (14 · 15번)
 

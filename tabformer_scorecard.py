@@ -10,6 +10,7 @@ import joblib
 import numpy as np
 from sklearn.metrics import average_precision_score
 
+from country_features import DIFFERS_FROM_USUAL, HOME_COUNTRY_TABFORMER, SEEN_BEFORE, country_features, tabformer_country
 from features import _parse_timestamp, build_features
 from rule_engine import DENY_MIN_SCORE, REVIEW_MIN_SCORE, evaluate_rules
 from scorecard import EXPERIMENT_FPR, pad, predictions_with_fp_budget
@@ -24,6 +25,8 @@ MODEL_DIR = BASE_DIR / "models"
 REPORT_PATH = BASE_DIR / "reports" / "tabformer_scorecard.md"
 ONLINE = "Online Transaction"
 LOCATION_FEATURE = "locationSeenBefore"
+# Ⓥ3 고르기 규칙(돌리기 전 고정): Validation 기준 ③에서 잡은 사기가 많은 쪽, 차이가 이 값 이하면 B
+CHOICE_MARGIN = 3
 
 
 def location_seen_before(transactions):
@@ -51,6 +54,16 @@ def train_tabformer_rf(features, transactions, split_info, columns):
     started = perf_counter()
     pipeline.fit(train_x, train_y)
     return pipeline, perf_counter() - started
+
+
+def caught_at_budget(y, scores):
+    # 기준 ③(정상 EXPERIMENT_FPR까지 헛경보)에서 잡은 사기 수
+    budget = int(np.floor(EXPERIMENT_FPR * int((y == 0).sum()) + 1e-9))
+    return int(((y == 1) & predictions_with_fp_budget(y, scores, budget)).sum())
+
+
+def choose_country_definition(caught_a, caught_b):
+    return "A" if caught_a - caught_b > CHOICE_MARGIN else "B"
 
 
 def caught_line(name, y, prediction, total):
@@ -126,9 +139,24 @@ def main():
     location_x, _ = make_xy(features, transactions, val, location_columns)
     location_scores = location_pipeline.predict_proba(location_x)[:, 1]
 
+    # Ⓥ3 국가 칸 비교: 장소를 국가 단위로 바꿔(미국 주 → US, 온라인 → 국가 없음) A · B를 한 칸씩 더한다
+    for transaction in transactions:
+        transaction["country"] = tabformer_country(transaction.get("locationRef"))
+    for row, values in zip(features, country_features(transactions, home_country=HOME_COUNTRY_TABFORMER, country_key="country")):
+        row.update(values)
+    country_runs = {}
+    for label, feature in (("A", SEEN_BEFORE), ("B", DIFFERS_FROM_USUAL)):
+        print(f"RF + 국가 칸 {label} 학습 중")
+        country_columns = [*columns, feature]
+        country_pipeline, country_seconds = train_tabformer_rf(features, transactions, split_info, country_columns)
+        country_x, _ = make_xy(features, transactions, val, country_columns)
+        country_runs[label] = (country_pipeline, country_columns, country_seconds, country_pipeline.predict_proba(country_x)[:, 1])
+
     model_scores = {
         "RF (TabFormer로 학습)": tabformer_scores,
         "RF + 지역 칸": location_scores,
+        "RF + 국가 A (처음 본 국가)": country_runs["A"][3],
+        "RF + 국가 B (평소와 다름)": country_runs["B"][3],
         "rf-v2 (합성 학습 그대로)": v2_scores,
     }
 
@@ -141,6 +169,7 @@ def main():
     lines.append(f"- 나누기: 시간순 Train {len(split_info['indices']['Train']):,} · Validation {len(val):,} · Test {len(split_info['indices']['Test']):,} (경계를 넘는 공격 묶음 {len(split_info['crossing_episodes'])}개 제외). 아래 숫자는 모두 Validation")
     lines.append(f"- RF (TabFormer로 학습): rf-v2와 같은 칸 {len(columns)}개 · 같은 설정, 학습 {seconds:.0f}초, Validation F1 최고 기준값 {threshold:.2f} (F1 {val_f1:.4f})")
     lines.append(f"- RF + 지역 칸: 위 RF에 \"이 손님이 앞서 같은 장소(가게가 있는 주 · 나라, 온라인은 ONLINE)에서 결제한 적 있나\" 한 칸만 더함 (학습 {location_seconds:.0f}초). 돈워리의 \"평소와 다른 접속 국가\"를 대신하는 확인 실험 — 원인이 장소 정보 부족인지 확인")
+    lines.append(f"- RF + 국가 A · B (Ⓥ3): 장소를 국가 단위로 바꿔(미국 주 → US, 해외는 나라, 온라인 → 국가 없음) 한 칸만 더함. A \"앞서 이 국가에서 결제한 적 있나\" · B \"앞선 결제에서 가장 많은 국가(동률이면 먼저 나온 국가)와 다른가\", 이력 없으면 기본 국가 US와 비교, 국가 없음은 -1 (학습 {country_runs['A'][2]:.0f}초 · {country_runs['B'][2]:.0f}초)")
     lines.append("- rf-v2 (합성 학습 그대로): 팀 ai-server 모델과 같은 파일을 다시 학습하지 않고 채점 — 처음 보는 데이터에서도 통하는지")
     lines.append("- Rule: `rule_engine.py` (팀 R01~R08 재현). 기기 · IP · 차단 목록이 없어 R02 · R05 · R07은 꺼짐")
     lines.append("- 합성 데이터 결과라 실제 결제 성능의 근거는 아님")
@@ -151,6 +180,22 @@ def main():
     if online.any() and len(set(y[online])) == 2:
         section(lines, "참고 — 온라인 결제만 (돈워리와 같은 비대면)", y[online], rule_scores[online],
                 {name: scores[online] for name, scores in model_scores.items()})
+
+    caught_a = caught_at_budget(y, country_runs["A"][3])
+    caught_b = caught_at_budget(y, country_runs["B"][3])
+    chosen = choose_country_definition(caught_a, caught_b)
+    chosen_pipeline, chosen_columns = country_runs[chosen][0], country_runs[chosen][1]
+    test = split_info["indices"]["Test"]
+    y_test = np.asarray([int(transactions[i]["fraudLabel"]) for i in test])
+    test_chosen = chosen_pipeline.predict_proba(make_xy(features, transactions, test, chosen_columns)[0])[:, 1]
+    test_base = pipeline.predict_proba(make_xy(features, transactions, test, columns)[0])[:, 1]
+    lines.append("## 국가 칸 고르기 (Ⓥ3)")
+    lines.append("")
+    lines.append(f"- 규칙(돌리기 전 고정): Validation 기준 ③에서 잡은 사기가 많은 쪽, 차이가 {CHOICE_MARGIN}건 이하면 B")
+    lines.append(f"- Validation 기준 ③: A {caught_a}건 · B {caught_b}건 → **{chosen}**")
+    lines.append(f"- Test 한 번(고른 쪽만, 사기 {int((y_test == 1).sum())}건): 기준 ③ 잡은 사기 RF {caught_at_budget(y_test, test_base)} → RF + 국가 {chosen} {caught_at_budget(y_test, test_chosen)}"
+                 f" · AP {average_precision_score(y_test, test_base):.4f} → {average_precision_score(y_test, test_chosen):.4f}")
+    lines.append("")
 
     lines.append("## 참고 — Validation에서 Rule이 걸린 횟수")
     lines.append("")
