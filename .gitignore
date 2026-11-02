@@ -6,3 +6,4 @@ __pycache__/
 # 크고 다시 만들 수 있음 (generate_data · train_* 스크립트)
 data/
 models/
+exports/

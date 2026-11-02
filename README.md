@@ -10,7 +10,8 @@ DonWorry(돈워리) FDS(Fraud Detection System, 이상거래 탐지)를 고도�
 
 - 팀 저장소: [team-sweethan/DonWorry](https://github.com/team-sweethan/DonWorry)
 - 결제 판정은 팀 저장소의 Rule Engine(R01~R08)만 합니다. 이 저장소의 모델은 결제 결과를 바꾸지 않습니다.
-- 팀 저장소의 ai-server가 쓰는 모델은 `ai-server/models/rf-v1.joblib` 하나입니다. 이 저장소의 `train_random_forest.py`가 만든 `models/random_forest_baseline.joblib`을 joblib `compress=3`으로 다시 저장한 파일입니다(16MB → 3.6MB).
+- 팀 저장소 ai-server의 모델 파일은 `ai-server/models/<버전>.joblib`입니다. rf-v1은 `models/random_forest_baseline.joblib`, rf-v2는 `models/random_forest_v2.joblib`을 joblib `compress=3`으로 다시 저장한 파일입니다(약 16MB → 3.5MB). 팀 저장소 #450에서 기본 모델을 rf-v2로 바꾸고 rf-v1은 되돌리기용으로 남겼습니다.
+- ai-server에 넣는 모델 파일과 golden 정답(`tests/fixtures/ml_golden_<버전>.json`)은 `export_ai_server_model.py`로 만듭니다. 이 스크립트로 rf-v1 golden을 다시 만들면 팀 저장소의 기존 `ml_golden.json`과 같습니다(11/02 확인, 30건 Feature · 확률 차이 0).
 - 다음 후보는 rf-v2(`train_random_forest_v2.py`, 가맹점 번호 `merchantId`를 뺀 모델)입니다. v1은 합성 가맹점 1001~1003만 배워서 실제 가맹점 번호가 들어오면 확률이 흔들립니다. 성능 유지 판정(`compare_rf_v1_v2.py`)을 통과한 뒤에만 팀 저장소 ai-server에 올립니다.
 - ai-server는 그 모델로 사기 확률을 계산해 Rule 결과 옆에 기록만 합니다(Shadow Mode, 그림자 평가). 결정 배경은 팀 저장소 `docs/decisions/0061-fds-ml-shadow-inference.md`(ADR-0061)에 있습니다.
 - `features.py`는 팀 저장소 `ai-server/app/ml/features.py`와 계산이 같아야 합니다(그쪽은 코드 정렬만 다름). 한쪽을 바꾸면 다른 쪽과 ai-server `tests/fixtures/ml_golden.json`도 함께 바꿉니다.
@@ -42,7 +43,7 @@ python -m venv .venv
 
 ## 4. 실행 순서
 
-`data/`와 `models/`는 Git에 올리지 않습니다. 아래 순서대로 다시 만들 수 있습니다.
+`data/` · `models/` · `exports/`는 Git에 올리지 않습니다. 아래 순서대로 다시 만들 수 있습니다.
 
 ```text
 generate_data ─▶ train_random_forest ─▶ train_xgboost ─┬─▶ train_isolation_forest
@@ -62,6 +63,7 @@ generate_data ─▶ train_random_forest ─▶ train_xgboost ─┬─▶ train
 | 8 | `python scorecard.py` | 기본 · 실험 | 모델 성적표 `reports/scorecard.md` — Rule(R01~R08 재현) · RF · RF v2 · XGB · 하이브리드 · 대조군(하이브리드와 같은 30% 데이터로 배운 XGB)을 같은 헛경보 수에서 비교. 없는 모델 파일 · 라이브러리는 건너뜀 |
 | 9 | `python train_random_forest_v2.py` | 기본 | `models/random_forest_v2.joblib` (rf-v2 후보) — v1과 같은 절차, 가맹점 번호만 뺌 (1번 필요). 만든 뒤 8번을 다시 돌리면 성적표에 RF v2 줄이 생김 |
 | 10 | `python compare_rf_v1_v2.py` | 기본 | v1 vs v2 성적표 `reports/rf_v1_vs_v2.md` + 통과 판정(헛경보 50건 기준 잡은 사기 5% 넘게 감소 없음 · AP 하락 0.01 이내), 가맹점 번호만 바꿨을 때 확률 흔들림 비교 (2 · 9번 필요) |
+| 11 | `python export_ai_server_model.py --model models/random_forest_v2.joblib --version rf-v2 --cases ../ai-server/tests/fixtures/ml_golden.json` | 기본 | `exports/rf-v2.joblib`(압축 모델) · `exports/ml_golden_rf-v2.json`(golden 정답) — 팀 저장소 ai-server에 넣을 파일. 사례(대상 결제 · 이력)는 기존 golden에서 가져오고 정답만 이 모델로 다시 계산 (1 · 9번 필요, 팀 저장소 폴더 안에서 실행) |
 
 - 데이터는 거래 시각 순으로 Train 70% · Validation 15% · Test 15%로 나눕니다. 경계를 넘는 공격 사건은 평가 데이터에서 뺍니다(`split_and_purge`).
 - 같은 헛경보 기준: Validation 정상 거래 2,555건 중 50건까지만 헛경보를 허용하도록(`TARGET_FPR = 50 / 2555`) 모델마다 기준값을 맞춘 뒤 탐지 수를 비교합니다.
