@@ -58,10 +58,12 @@ generate_data ─▶ train_random_forest ─▶ train_xgboost ─┬─▶ train
 | 5 | `python train_transformer.py` | 실험 | `models/transformer_candidate.pt` · `tabular_mlp_candidate.pt` · `neural_preprocessing.joblib` (RF · XGB 파일 필요) |
 | 6 | `python train_hybrid_xgboost.py` | 실험 | `models/hybrid_encoder_candidate.pt` · `hybrid_xgboost_candidate.joblib` · `hybrid_preprocessing.joblib` (RF · XGB 파일 필요) |
 | 7 | `python compare_models_fixed_fpr.py` | 실험 | RF · XGB · Transformer를 같은 헛경보 수준에서 비교 (5번까지 필요) |
+| 8 | `python scorecard.py` | 기본 · 실험 | 모델 성적표 `reports/scorecard.md` — Rule(R01~R08 재현) · RF · XGB · 하이브리드 · 대조군(하이브리드와 같은 30% 데이터로 배운 XGB)을 같은 헛경보 수에서 비교. 없는 모델 파일 · 라이브러리는 건너뜀 |
 
 - 데이터는 거래 시각 순으로 Train 70% · Validation 15% · Test 15%로 나눕니다. 경계를 넘는 공격 사건은 평가 데이터에서 뺍니다(`split_and_purge`).
 - 같은 헛경보 기준: Validation 정상 거래 2,555건 중 50건까지만 헛경보를 허용하도록(`TARGET_FPR = 50 / 2555`) 모델마다 기준값을 맞춘 뒤 탐지 수를 비교합니다.
 - Test 평가는 `train_random_forest.py`만 합니다. 나머지 모델은 Validation으로만 비교합니다.
+- `rule_engine.py`는 팀 저장소 `FdsEvaluationTransactionService.java`의 Rule 점수(R01 고액 30 · R04 10분 3회 30 · R02 새 기기 25 · R03 새 카드 25 · R06 카드 테스팅 45 · R08 거절 후 재시도 35, 100점 상한, 50점 보류 · 80점 거절)를 그대로 옮긴 것입니다. 합성 데이터에 IP · 차단 목록이 없어 R05 · R07은 항상 꺼집니다. 서버 Rule을 바꾸면 이 파일도 함께 바꿉니다.
 
 그 밖의 분석 스크립트:
 
@@ -80,6 +82,8 @@ generate_data ─▶ train_random_forest ─▶ train_xgboost ─┬─▶ train
   - `data/transactions.csv` · `data/fraud_episodes.csv`: SHA-256 일치
   - `models/random_forest_baseline.joblib`: 거래 2만 건의 사기 확률 차이 최대 2.2e-16, 기준값 0.30 동일 (팀 ai-server의 rf-v1과도 같음)
 - 신경망(Transformer · 하이브리드)은 seed를 고정해도 CPU · 라이브러리 환경에 따라 결과가 조금 다를 수 있습니다.
+- XGBoost도 새로 학습하면 운영체제 · CPU 스레드에 따라 결과가 조금 다를 수 있습니다. 예: 성적표 대조군(헛경보 5건) Windows PC 205건 · Linux 215건. 같은 컴퓨터에서는 다시 돌려도 같습니다.
+- 성적표 정본은 PC(학습한 모델 파일이 있는 곳)에서 만든 `reports/scorecard.md`입니다.
 
 ## 6. Windows 주의
 
@@ -206,7 +210,7 @@ SIM-DEVICE-<UUID5 기반 식별자>
 python -m pytest tests -q
 ```
 
-- 기본 설치: 48개 통과, torch가 필요한 테스트 파일 2개(`test_transformer.py` · `test_hybrid_xgboost.py`)는 자동으로 건너뜀
+- 기본 설치: 53개 통과, torch가 필요한 테스트 파일 2개(`test_transformer.py` · `test_hybrid_xgboost.py`)는 자동으로 건너뜀
 - 실험 설치: 위 2개 파일의 9개까지 모두 실행
 
 주요 검증: 거래 · 사기 비율, 7종 사기 시나리오, ID 중복, 시간순 정합성, CSV 재읽기, 같은 seed 재현성, 공격 사건 연결, Feature 계산(현재 거래보다 이전 거래만 사용), 시간순 분할과 경계 사건 제외, 시퀀스 생성, 모델 출력 모양.
