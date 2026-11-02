@@ -80,6 +80,7 @@ generate_data ─▶ train_random_forest ─▶ train_xgboost ─┬─▶ train
 | 13 | `python tabformer_scorecard.py` | 기본 | 외부 데이터 성적표 `reports/tabformer_scorecard.md` — Rule · RF(TabFormer로 학습, rf-v2와 같은 칸 · 설정) · RF + 지역 칸(확인 실험) · RF + 국가 A · B(Ⓥ3 국가 칸 정의 고르기, `country_features.py`) · rf-v2(합성 학습 그대로)를 같은 헛경보 수에서 비교 (9 · 12번 필요) |
 | 14 | `python shadow_scenarios.py` | 기본 | 돈워리 로컬 서버(팀 저장소 실행 중)에 정상 · 사기 시나리오 결제 50건을 보내고 정답 라벨 `data/shadow/scenario_labels.csv`를 남김. 서명 · 전송은 팀 저장소 `scripts/demo/cakeshop_pay.py`를 그대로 씀 (`--dry-run`으로 목록만 보기) |
 | 15 | `python shadow_export.py` → `python shadow_whatif.py --labels data/shadow/scenario_labels.csv` | 기본 | 만약 비교 `reports/shadow_whatif.md` — Shadow 기록(`sql/shadow_export.sql` 결과 CSV)으로 Rule × ML 일치표 · 직원 판정 · 시나리오 라벨 대조 · 기준값 바꿔 보기 · 국가 공백 · 같은 결제 rf-v1 ↔ rf-v2 (아래 "Shadow 만약 비교" 절) |
+| 16 | `python generate_data_v3.py` | 기본 | v3 합성 데이터(Ⓥ3) `data/v3/transactions.csv`(접속 국가 `ipCountryCode` 칸 추가, IP 원본 없음) · `fraud_episodes.csv` · `conditions.csv`(결제별 상황 — 거래 파일과 분리해 학습에 섞이지 않게). 손님 10,000 · 정상 199,000 · 사기 1,000(0.5%) · seed 42, 기존 생성기 결과 위에 "정상인데 이상해 보임 · 해외인데 정상 · 평소 국가로 위장한 사기 · 해외 · 고위험 국가(NG) 사기"를 입힘 (비율은 실험용 가정). 1번 데이터는 바뀌지 않음 |
 
 - 데이터는 거래 시각 순으로 Train 70% · Validation 15% · Test 15%로 나눕니다. 경계를 넘는 공격 사건은 평가 데이터에서 뺍니다(`split_and_purge`).
 - 같은 헛경보 기준: Validation 정상 거래 2,555건 중 50건까지만 헛경보를 허용하도록(`TARGET_FPR = 50 / 2555`) 모델마다 기준값을 맞춘 뒤 탐지 수를 비교합니다.
