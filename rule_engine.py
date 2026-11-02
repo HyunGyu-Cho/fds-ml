@@ -5,7 +5,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 # 팀 저장소 backend FdsEvaluationTransactionService.java의 Rule(R01~R08)을 그대로 옮긴 오프라인 재현
-# R05(고위험 국가 IP) · R07(차단 목록)은 합성 데이터에 IP · 차단 목록이 없어 항상 꺼진다
+# R05(고위험 국가 IP)는 고위험 국가 목록을 넘길 때만 켜진다 (기본 빈 목록 → v1 · v2 데이터 결과 그대로)
+# R07(차단 목록)은 합성 데이터에 차단 목록이 없어 항상 꺼진다
 
 HIGH_AMOUNT_THRESHOLD = 500_000
 HIGH_AMOUNT_SCORE = 30
@@ -14,6 +15,7 @@ REPEAT_COUNT_THRESHOLD = 3
 REPEAT_SCORE = 30
 NEW_DEVICE_SCORE = 25
 NEW_CARD_SCORE = 25
+HIGH_RISK_COUNTRY_SCORE = 40
 SMALL_AMOUNT_MAX = 10_000
 CARD_TESTING_SMALL_COUNT = 5
 CARD_TESTING_CARD_COUNT = 3
@@ -25,6 +27,7 @@ MAX_SCORE = 100
 REVIEW_MIN_SCORE = 50
 DENY_MIN_SCORE = 80
 
+# 고위험 국가 목록을 넘기지 않는 기존 성적표 기준으로 꺼진 Rule
 ALWAYS_OFF_RULES = ("R05", "R07")
 
 
@@ -36,6 +39,7 @@ class Payment:
     device_id: str | None
     card_token: str | None
     authorization_result: str
+    ip_country_code: str | None = None
 
 
 @dataclass(frozen=True)
@@ -74,6 +78,7 @@ def to_payment(row: dict) -> Payment:
         device_id=_optional(row.get("deviceId")),
         card_token=_optional(row.get("cardToken")),
         authorization_result=row.get("authorizationResult", ""),
+        ip_country_code=_optional(row.get("ipCountryCode")),
     )
 
 
@@ -93,7 +98,7 @@ class CustomerHistory:
             self.approved_cards.add(payment.card_token)
 
 
-def evaluate_payment(current: Payment, history: CustomerHistory) -> RuleResult:
+def evaluate_payment(current: Payment, history: CustomerHistory, high_risk_countries: frozenset[str] = frozenset()) -> RuleResult:
     # history는 같은 가맹점 · 같은 손님의 앞선 거래만 (현재 결제의 승인 결과는 보지 않는다)
     hits = []
     score = 0
@@ -122,6 +127,11 @@ def evaluate_payment(current: Payment, history: CustomerHistory) -> RuleResult:
         hits.append("R03")
         score += NEW_CARD_SCORE
 
+    # R05: 접속 국가가 고위험 국가 목록에 있을 때 (국가 없음은 안 켜짐 — Java ipCountryCode != null)
+    if current.ip_country_code and current.ip_country_code in high_risk_countries:
+        hits.append("R05")
+        score += HIGH_RISK_COUNTRY_SCORE
+
     # R06 · R08은 isWithinWindow라 10분 경계 시각은 빼고 현재 시각까지 포함한다
     window = [p for p in history.recent if window_start < p.requested_at]
     small_ids = {p.payment_id for p in window if p.amount <= SMALL_AMOUNT_MAX}
@@ -148,8 +158,10 @@ def evaluate_payment(current: Payment, history: CustomerHistory) -> RuleResult:
     return RuleResult(score=score, decision=decide(score), hits=tuple(hits))
 
 
-def evaluate_rules(transactions: list[dict]) -> list[RuleResult]:
+def evaluate_rules(transactions: list[dict], high_risk_countries=()) -> list[RuleResult]:
     # 시각 순서대로 돌며 결제마다 그 시점까지의 이력으로 점수를 매긴다 (반환 순서 = 입력 순서)
+    # high_risk_countries: R05에 쓸 고위험 국가 코드 목록 (Ⓥ3 v3 데이터는 NG)
+    risky = frozenset(high_risk_countries)
     payments = [to_payment(row) for row in transactions]
     order = sorted(range(len(payments)), key=lambda i: (payments[i].requested_at, int(payments[i].payment_id)))
     history: dict[tuple[str, str], CustomerHistory] = defaultdict(CustomerHistory)
@@ -158,7 +170,7 @@ def evaluate_rules(transactions: list[dict]) -> list[RuleResult]:
     for index in order:
         row = transactions[index]
         key = (str(row["merchantId"]), str(row["customerRef"]))
-        results[index] = evaluate_payment(payments[index], history[key])
+        results[index] = evaluate_payment(payments[index], history[key], risky)
         history[key].add(payments[index])
 
     return results

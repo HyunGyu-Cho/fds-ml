@@ -81,11 +81,13 @@ generate_data ─▶ train_random_forest ─▶ train_xgboost ─┬─▶ train
 | 14 | `python shadow_scenarios.py` | 기본 | 돈워리 로컬 서버(팀 저장소 실행 중)에 정상 · 사기 시나리오 결제 50건을 보내고 정답 라벨 `data/shadow/scenario_labels.csv`를 남김. 서명 · 전송은 팀 저장소 `scripts/demo/cakeshop_pay.py`를 그대로 씀 (`--dry-run`으로 목록만 보기) |
 | 15 | `python shadow_export.py` → `python shadow_whatif.py --labels data/shadow/scenario_labels.csv` | 기본 | 만약 비교 `reports/shadow_whatif.md` — Shadow 기록(`sql/shadow_export.sql` 결과 CSV)으로 Rule × ML 일치표 · 직원 판정 · 시나리오 라벨 대조 · 기준값 바꿔 보기 · 국가 공백 · 같은 결제 rf-v1 ↔ rf-v2 (아래 "Shadow 만약 비교" 절) |
 | 16 | `python generate_data_v3.py` | 기본 | v3 합성 데이터(Ⓥ3) `data/v3/transactions.csv`(접속 국가 `ipCountryCode` 칸 추가, IP 원본 없음) · `fraud_episodes.csv` · `conditions.csv`(결제별 상황 — 거래 파일과 분리해 학습에 섞이지 않게). 손님 10,000 · 정상 199,000 · 사기 1,000(0.5%) · seed 42, 기존 생성기 결과 위에 "정상인데 이상해 보임 · 해외인데 정상 · 평소 국가로 위장한 사기 · 해외 · 고위험 국가(NG) 사기"를 입힘 (비율은 실험용 가정). 1번 데이터는 바뀌지 않음 |
+| 17 | `python train_random_forest_v3.py` | 기본 | rf-v3(Ⓥ3) — 16번 데이터로 rf-v2와 같은 절차(칸 구성 2 × class_weight 2, Validation F1로 선정) · 칸은 v2 12칸 + `countryDiffersFromUsual`(평소 국가와 다른가, 이력 없으면 KR과 비교, 국가 없음 -1). `models/random_forest_v3.joblib`(+ `home_country`) · 참고 모델 `random_forest_v3_no_country.joblib`(같은 데이터 · 국가 칸 없음). 약 3~4분 |
+| 18 | `python compare_v2_v3.py` | 기본 | rf-v2(팀 ai-server 파일 그대로) vs rf-v3를 v3 Test에서 비교해 통과 기준 5개 자동 판정 → `reports/rf_v2_vs_v3.md`. 비교 지점은 Rule 보류(50점+, R05 켬 · 고위험 NG)와 같은 헛경보 수. `data/tabformer`가 있으면 기준 5(TabFormer AP)도 계산(오래 걸림), 없으면 `--skip-tabformer`처럼 보류 |
 
 - 데이터는 거래 시각 순으로 Train 70% · Validation 15% · Test 15%로 나눕니다. 경계를 넘는 공격 사건은 평가 데이터에서 뺍니다(`split_and_purge`).
 - 같은 헛경보 기준: Validation 정상 거래 2,555건 중 50건까지만 헛경보를 허용하도록(`TARGET_FPR = 50 / 2555`) 모델마다 기준값을 맞춘 뒤 탐지 수를 비교합니다.
 - Test 평가는 `train_random_forest.py`만 합니다. 나머지 모델은 Validation으로만 비교합니다.
-- `rule_engine.py`는 팀 저장소 `FdsEvaluationTransactionService.java`의 Rule 점수(R01 고액 30 · R04 10분 3회 30 · R02 새 기기 25 · R03 새 카드 25 · R06 카드 테스팅 45 · R08 거절 후 재시도 35, 100점 상한, 50점 보류 · 80점 거절)를 그대로 옮긴 것입니다. 합성 데이터에 IP · 차단 목록이 없어 R05 · R07은 항상 꺼집니다. 서버 Rule을 바꾸면 이 파일도 함께 바꿉니다.
+- `rule_engine.py`는 팀 저장소 `FdsEvaluationTransactionService.java`의 Rule 점수(R01 고액 30 · R04 10분 3회 30 · R02 새 기기 25 · R03 새 카드 25 · R06 카드 테스팅 45 · R08 거절 후 재시도 35, 100점 상한, 50점 보류 · 80점 거절)를 그대로 옮긴 것입니다. R05(고위험 국가 IP 40점)는 `evaluate_rules(..., high_risk_countries)`로 목록을 넘길 때만 켜지고(v3 비교만 NG), R07은 차단 목록이 없어 항상 꺼집니다. 서버 Rule을 바꾸면 이 파일도 함께 바꿉니다.
 
 그 밖의 분석 스크립트:
 
@@ -109,6 +111,7 @@ generate_data ─▶ train_random_forest ─▶ train_xgboost ─┬─▶ train
   - 해석: TabFormer의 사기는 "어디서 · 무슨 업종에서"(평소와 다른 주 · 해외 사기율 37배)로 드러나는데, 우리 12칸은 행동 이력만 봐서 약하다. rf-v2가 무작위 수준인 것은 합성 데이터가 우리 Feature가 잡는 신호로 사기를 만들었기 때문 — 합성 성적표의 "Rule 대비 약 3.8배"는 우리가 설계한 사기 시나리오 안에서만 맞는 결론
   - 장소 칸("앞서 이 장소에서 결제한 적 있나")은 조금 도움(+10건). 돈워리에 "평소와 다른 접속 국가" 칸을 넣을지는 더 현실적인 합성 데이터로 다시 학습하는 v3 때 다시 본다
   - Ⓥ3 국가 칸 비교 (11/03): 장소를 국가 단위로 바꿔 비교한 결과 B "평소 국가와 다른가"를 고름. 정상 1.96% 헛경보에서 잡은 사기 A 51 · B 245/252, AP A 0.0359 · B 0.5080, Test 한 번 B 170/174 · AP 0.3875. TabFormer 사기가 해외 매장 결제에 몰린 합성 데이터라 크게 보이고, 온라인 결제(사기 9건)에서는 효과가 없음 → 돈워리(전부 온라인) 성능의 근거는 아님
+  - Ⓥ3 rf-v3 (11/03, `reports/rf_v2_vs_v3.md`): ❌ 불통과 → v2 유지. 같은 헛경보에서 잡은 사기 v2 138 → v3 170, 해외 사기 65% → 99%로 늘었지만 해외 여행 중 정상의 50%에 경보가 나 기준 3(해외 정상 헛경보 10% 이하)을 넘지 못함. TabFormer AP 개선(0.0021 → 0.2291)은 국가 칸 덕이고 국가 칸 없는 v3는 0.0017(무작위 수준) — "평소 국가와 다른가" 하나로는 여행과 해외 공격을 못 가름
 
 ### 돈워리 Shadow 만약 비교 (14 · 15번)
 

@@ -99,3 +99,26 @@ def test_r06_requires_all_three_conditions():
     assert "R06" in full[4].hits
     assert "R06" not in one_card[4].hits
     assert "R06" not in big_amount[4].hits
+
+
+# R05: 고위험 국가 접속일 때만 +40, 다른 국가 · 국가 없음은 안 켜지고, 목록을 안 주면 기존 성적표처럼 꺼진다
+def test_rule_engine_R05_highRiskCountryOnly():
+    rows = [
+        {**tx(1, 0, customer="C1"), "ipCountryCode": "NG"},
+        {**tx(2, 30, customer="C2"), "ipCountryCode": "KR"},
+        {**tx(3, 60, customer="C3"), "ipCountryCode": ""},
+        {**tx(4, 90, customer="C4", amount=600_000), "ipCountryCode": "NG"},
+    ]
+
+    with_list = evaluate_rules(rows, ("NG",))
+    assert ["R05" in r.hits for r in with_list] == [True, False, False, True]
+    assert (with_list[0].score, with_list[0].decision) == (40, "ALLOW")
+    assert (with_list[3].score, with_list[3].decision) == (70, "REVIEW")
+    assert [r.score for r in with_list[1:3]] == [0, 0]
+
+    without = evaluate_rules(rows)
+    assert all("R05" not in r.hits for r in without)
+    assert [r.score for r in without] == [0, 0, 0, 30]
+
+    # 국가 칸이 없는 v1 · v2 데이터 모양은 목록을 줘도 안 켜진다
+    assert evaluate_rules([tx(5, 0)], ("NG",))[0].hits == ()

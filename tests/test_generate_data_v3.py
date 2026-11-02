@@ -71,3 +71,17 @@ def test_generate_v3_sameSeed_sameHash(tmp_path):
     assert file_hashes(tmp_path / "a") == file_hashes(tmp_path / "b")
     assert file_hashes(tmp_path / "a") != file_hashes(tmp_path / "c")
     assert len(file_hashes(tmp_path / "a")) == 3
+
+
+# 상황 기록의 사기 상황 3종 = fraudLabel 1인 결제와 정확히 같아야 해외 사기 · 해외 정상 비율의 분모가 맞다 (저장 파일 기준)
+def test_generate_v3_conditions_matchFraudLabel(small):
+    _, _, out = small
+    with (out / "transactions.csv").open(encoding="utf-8", newline="") as file:
+        labels = {row["paymentId"]: row["fraudLabel"] for row in csv.DictReader(file)}
+    with (out / "conditions.csv").open(encoding="utf-8", newline="") as file:
+        conditions = {row["paymentId"]: row["condition"] for row in csv.DictReader(file)}
+
+    assert set(conditions) == set(labels)
+    assert set(conditions.values()) <= {*v3.NORMAL_CONDITIONS, *v3.FRAUD_CONDITIONS}
+    for payment_id, condition in conditions.items():
+        assert (condition in v3.FRAUD_CONDITIONS) == (labels[payment_id] == "1"), payment_id
