@@ -20,7 +20,19 @@ DonWorry(돈워리) FDS(Fraud Detection System, 이상거래 탐지)를 고도�
 
 - Python 3.12
 - Windows / PowerShell (Linux에서도 같은 명령으로 실행됨)
-- 외부 데이터셋 및 실제 개인정보 사용 없음
+- 실제 개인정보 사용 없음. 외부 데이터는 IBM TabFormer 합성 데이터 하나만 선택적으로 사용 (아래 "외부 데이터 출처 · 라이선스")
+
+## 외부 데이터 출처 · 라이선스
+
+이 저장소는 외부 데이터를 **포함하지 않습니다**. 아래 데이터는 각자 내려받아 `external/`에 두고 쓰며, 원본과 변환 결과(`external/` · `data/`)는 Git에 올리지 않습니다.
+
+- 데이터: IBM TabFormer 합성 카드 거래 데이터 (`card_transaction.v1.csv`)
+- 출처: https://github.com/IBM/TabFormer (IBM), 내려받기 https://ibm.box.com/v/tabformer-data
+- 논문: Padhi et al., "Tabular Transformers for Modeling Multivariate Time Series", ICASSP 2021 (https://arxiv.org/abs/2011.01843)
+- 라이선스: Apache License 2.0 (https://www.apache.org/licenses/LICENSE-2.0) — 위 저장소의 `LICENSE`. 압축 파일 안에 데이터 외 다른 약관 파일은 없습니다 (11/02 확인)
+- 이 저장소에서 바꾼 것: `tabformer_convert.py`로 칸 이름 · 형식을 돈워리 결제 모양으로 바꾸고(금액 달러 → 원, 시각 형식, 거절 여부 등), 고객 250명 · 2015~2019년 표본만 사용합니다
+- IBM이 이 실험을 검토하거나 보증한 것이 아닙니다. 성적표에는 집계 숫자만 싣고 원본 거래 줄은 싣지 않습니다
+- 변환한 데이터를 다른 사람에게 건넬 때는 Apache 2.0 라이선스 사본과 위 "바꾼 것"을 함께 전달해야 합니다 (라이선스 4조)
 
 ## 3. 설치
 
@@ -43,7 +55,7 @@ python -m venv .venv
 
 ## 4. 실행 순서
 
-`data/` · `models/` · `exports/`는 Git에 올리지 않습니다. 아래 순서대로 다시 만들 수 있습니다.
+`data/` · `models/` · `exports/` · `external/`은 Git에 올리지 않습니다. 아래 순서대로 다시 만들 수 있습니다.
 
 ```text
 generate_data ─▶ train_random_forest ─▶ train_xgboost ─┬─▶ train_isolation_forest
@@ -64,6 +76,8 @@ generate_data ─▶ train_random_forest ─▶ train_xgboost ─┬─▶ train
 | 9 | `python train_random_forest_v2.py` | 기본 | `models/random_forest_v2.joblib` (rf-v2 후보) — v1과 같은 절차, 가맹점 번호만 뺌 (1번 필요). 만든 뒤 8번을 다시 돌리면 성적표에 RF v2 줄이 생김 |
 | 10 | `python compare_rf_v1_v2.py` | 기본 | v1 vs v2 성적표 `reports/rf_v1_vs_v2.md` + 통과 판정(헛경보 50건 기준 잡은 사기 5% 넘게 감소 없음 · AP 하락 0.01 이내), 가맹점 번호만 바꿨을 때 확률 흔들림 비교 (2 · 9번 필요) |
 | 11 | `python export_ai_server_model.py --model models/random_forest_v2.joblib --version rf-v2 --cases ../ai-server/tests/fixtures/ml_golden.json` | 기본 | `exports/rf-v2.joblib`(압축 모델) · `exports/ml_golden_rf-v2.json`(golden 정답) — 팀 저장소 ai-server에 넣을 파일. 사례(대상 결제 · 이력)는 기존 golden에서 가져오고 정답만 이 모델로 다시 계산 (1 · 9번 필요, 팀 저장소 폴더 안에서 실행) |
+| 12 | `python tabformer_convert.py` | 기본 | 외부 데이터(IBM TabFormer) → `data/tabformer/transactions.csv` · `fraud_episodes.csv`. 기본: 고객 250명(seed 42) · 2015~2019년 · 1달러 1,300원 (아래 "외부 데이터" 절, 원본 필요) |
+| 13 | `python tabformer_scorecard.py` | 기본 | 외부 데이터 성적표 `reports/tabformer_scorecard.md` — Rule · RF(TabFormer로 학습, rf-v2와 같은 칸 · 설정) · RF + 지역 칸(확인 실험) · rf-v2(합성 학습 그대로)를 같은 헛경보 수에서 비교 (9 · 12번 필요) |
 
 - 데이터는 거래 시각 순으로 Train 70% · Validation 15% · Test 15%로 나눕니다. 경계를 넘는 공격 사건은 평가 데이터에서 뺍니다(`split_and_purge`).
 - 같은 헛경보 기준: Validation 정상 거래 2,555건 중 50건까지만 헛경보를 허용하도록(`TARGET_FPR = 50 / 2555`) 모델마다 기준값을 맞춘 뒤 탐지 수를 비교합니다.
@@ -79,6 +93,18 @@ generate_data ─▶ train_random_forest ─▶ train_xgboost ─┬─▶ train
 | `python analyze_sequence_readiness.py` | 기본 | 거래 순서(시퀀스) 학습에 쓸 수 있는지 점검 |
 | `python compare_rf_xgb_validation.py` | 실험 | RF · XGB 예측 비교 |
 | `python ablate_transformer_history.py` · `ablate_transformer_order.py` | 실험 | Transformer에서 과거 거래 · 순서를 없앴을 때의 차이 (제거 실험) |
+
+### 외부 데이터 — IBM TabFormer (12 · 13번)
+
+- 출처: [IBM TabFormer](https://github.com/IBM/TabFormer)의 합성 카드 거래 데이터 (Apache 2.0). 2,000명 · 약 2,439만 건 · 사기 0.12%. IBM이 이 실험을 검토 · 보증한 것은 아닙니다
+- 받기: README가 안내하는 Box 링크(https://ibm.box.com/v/tabformer-data)에서 `transactions.tgz`를 받아 압축을 풀면 `card_transaction.v1.csv` 하나가 나옵니다 → `external/card_transaction.v1.csv`에 둡니다. GitHub Download ZIP은 Git LFS라 실제 파일 대신 작은 안내 파일만 들어올 수 있습니다
+- 라이선스 확인(11/02): 저장소 LICENSE가 Apache 2.0이고, 압축 파일 안에도 CSV 말고 다른 약관 파일이 없습니다. 원본 · 변환 결과는 이 저장소에 올리지 않습니다(`external/` · `data/` 제외)
+- 돈워리 칸으로 바꾸기: User → 고객, User + Card → 카드, 시각은 한국 시간으로 읽음(시간대 Feature가 밀리지 않게), 금액은 달러 × 환율 · 환불(음수) 제외, `Errors?`가 있으면 거절, 기기 · IP 정보는 없음(R02 · R05 · 기기 Feature 꺼짐). 가게가 있는 주(해외면 나라, 온라인은 ONLINE)를 `locationRef`로 남겨 "RF + 지역 칸" 확인 실험에만 씀 — 돈워리의 "평소와 다른 접속 국가"를 대신하는 칸이고 `features.py`는 바꾸지 않음
+- 같은 카드의 사기가 7일 안에 이어지면 한 공격 묶음으로 봅니다 (학습 · 검증 구간에 나뉘어 들어가지 않게)
+- 결과 (11/02, `reports/tabformer_scorecard.md`, 검증 16만 건 · 사기 252건 · 사기율 0.16%)
+  - 정상 1.96% 헛경보에서 잡은 사기: Rule 14 · RF(TabFormer로 학습) 47 · RF + 지역 칸 57 · rf-v2(합성 학습 그대로) 8. AP는 무작위 0.0016 대비 RF 0.0146 · RF + 지역 칸 0.0169 · rf-v2 0.0021
+  - 해석: TabFormer의 사기는 "어디서 · 무슨 업종에서"(평소와 다른 주 · 해외 사기율 37배)로 드러나는데, 우리 12칸은 행동 이력만 봐서 약하다. rf-v2가 무작위 수준인 것은 합성 데이터가 우리 Feature가 잡는 신호로 사기를 만들었기 때문 — 합성 성적표의 "Rule 대비 약 3.8배"는 우리가 설계한 사기 시나리오 안에서만 맞는 결론
+  - 장소 칸("앞서 이 장소에서 결제한 적 있나")은 조금 도움(+10건). 돈워리에 "평소와 다른 접속 국가" 칸을 넣을지는 더 현실적인 합성 데이터로 다시 학습하는 v3 때 다시 본다
 
 ## 5. 재현성
 
@@ -215,10 +241,10 @@ SIM-DEVICE-<UUID5 기반 식별자>
 python -m pytest tests -q
 ```
 
-- 기본 설치: 56개 통과, torch가 필요한 테스트 파일 2개(`test_transformer.py` · `test_hybrid_xgboost.py`)는 자동으로 건너뜀
+- 기본 설치: 60개 통과, torch가 필요한 테스트 파일 2개(`test_transformer.py` · `test_hybrid_xgboost.py`)는 자동으로 건너뜀
 - 실험 설치: 위 2개 파일의 9개까지 모두 실행
 
-주요 검증: 거래 · 사기 비율, 7종 사기 시나리오, ID 중복, 시간순 정합성, CSV 재읽기, 같은 seed 재현성, 공격 사건 연결, Feature 계산(현재 거래보다 이전 거래만 사용), 시간순 분할과 경계 사건 제외, 시퀀스 생성, 모델 출력 모양, rf-v2 칸 구성(가맹점 번호 제외) · ai-server가 읽는 모델 파일 모양 · v1 vs v2 통과 판정.
+주요 검증: 거래 · 사기 비율, 7종 사기 시나리오, ID 중복, 시간순 정합성, CSV 재읽기, 같은 seed 재현성, 공격 사건 연결, Feature 계산(현재 거래보다 이전 거래만 사용), 시간순 분할과 경계 사건 제외, 시퀀스 생성, 모델 출력 모양, rf-v2 칸 구성(가맹점 번호 제외) · ai-server가 읽는 모델 파일 모양 · v1 vs v2 통과 판정, TabFormer 변환(고객 단위 표본 · 한 줄 변환 · 공격 묶음) · 장소 칸이 앞선 거래만 보는지.
 
 테스트 통과는 데이터 구조와 생성 규칙의 정합성을 확인하는 것이며, 실제 금융거래에 대한 ML 성능을 보증하지 않습니다.
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from collections import defaultdict
-from dataclasses import dataclass
+from collections import defaultdict, deque
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 # 팀 저장소 backend FdsEvaluationTransactionService.java의 Rule(R01~R08)을 그대로 옮긴 오프라인 재현
@@ -77,8 +77,24 @@ def to_payment(row: dict) -> Payment:
     )
 
 
-def evaluate_payment(current: Payment, prior: list[Payment]) -> RuleResult:
-    # prior는 같은 가맹점 · 같은 손님의 앞선 거래만 (현재 결제의 승인 결과는 보지 않는다)
+@dataclass
+class CustomerHistory:
+    # 같은 가맹점 · 같은 손님의 앞선 거래 요약 — 매번 전체 이력을 훑지 않게 (TabFormer처럼 손님당 수천 건일 때)
+    recent: deque[Payment] = field(default_factory=deque)
+    has_approved: bool = False
+    approved_devices: set[str | None] = field(default_factory=set)
+    approved_cards: set[str | None] = field(default_factory=set)
+
+    def add(self, payment: Payment) -> None:
+        self.recent.append(payment)
+        if payment.authorization_result == "APPROVED":
+            self.has_approved = True
+            self.approved_devices.add(payment.device_id)
+            self.approved_cards.add(payment.card_token)
+
+
+def evaluate_payment(current: Payment, history: CustomerHistory) -> RuleResult:
+    # history는 같은 가맹점 · 같은 손님의 앞선 거래만 (현재 결제의 승인 결과는 보지 않는다)
     hits = []
     score = 0
     window_start = current.requested_at - REPEAT_WINDOW
@@ -87,23 +103,27 @@ def evaluate_payment(current: Payment, prior: list[Payment]) -> RuleResult:
         hits.append("R01")
         score += HIGH_AMOUNT_SCORE
 
+    # 10분 경계 시각보다 오래된 거래는 다시 볼 일이 없다 (거래를 시각 순서로 처리하므로)
+    while history.recent and history.recent[0].requested_at < window_start:
+        history.recent.popleft()
+
     # R04는 JPA Between이라 10분 경계 시각도 포함한다
-    attempt_ids = {p.payment_id for p in prior if window_start <= p.requested_at <= current.requested_at}
+    attempt_ids = {p.payment_id for p in history.recent}
     attempt_ids.add(current.payment_id)
     if len(attempt_ids) >= REPEAT_COUNT_THRESHOLD:
         hits.append("R04")
         score += REPEAT_SCORE
 
-    approved = [p for p in prior if p.authorization_result == "APPROVED"]
-    if current.device_id and approved and all(p.device_id != current.device_id for p in approved):
+    # 앞선 승인 거래가 있고, 그중 같은 기기 · 카드가 하나도 없을 때
+    if current.device_id and history.has_approved and current.device_id not in history.approved_devices:
         hits.append("R02")
         score += NEW_DEVICE_SCORE
-    if current.card_token and approved and all(p.card_token != current.card_token for p in approved):
+    if current.card_token and history.has_approved and current.card_token not in history.approved_cards:
         hits.append("R03")
         score += NEW_CARD_SCORE
 
     # R06 · R08은 isWithinWindow라 10분 경계 시각은 빼고 현재 시각까지 포함한다
-    window = [p for p in prior if window_start < p.requested_at <= current.requested_at]
+    window = [p for p in history.recent if window_start < p.requested_at]
     small_ids = {p.payment_id for p in window if p.amount <= SMALL_AMOUNT_MAX}
     if current.amount <= SMALL_AMOUNT_MAX:
         small_ids.add(current.payment_id)
@@ -132,13 +152,13 @@ def evaluate_rules(transactions: list[dict]) -> list[RuleResult]:
     # 시각 순서대로 돌며 결제마다 그 시점까지의 이력으로 점수를 매긴다 (반환 순서 = 입력 순서)
     payments = [to_payment(row) for row in transactions]
     order = sorted(range(len(payments)), key=lambda i: (payments[i].requested_at, int(payments[i].payment_id)))
-    history: dict[tuple[str, str], list[Payment]] = defaultdict(list)
+    history: dict[tuple[str, str], CustomerHistory] = defaultdict(CustomerHistory)
     results: list[RuleResult | None] = [None] * len(payments)
 
     for index in order:
         row = transactions[index]
         key = (str(row["merchantId"]), str(row["customerRef"]))
         results[index] = evaluate_payment(payments[index], history[key])
-        history[key].append(payments[index])
+        history[key].add(payments[index])
 
     return results
