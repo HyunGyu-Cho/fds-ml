@@ -113,6 +113,7 @@ def load_model_scores(features, transactions, indices, split_info):
     # 파일 · 라이브러리가 없는 모델은 건너뛰고 이유를 남긴다
     loaders = {
         "RF": lambda: tree_scores("random_forest_baseline.joblib", features, transactions, indices, split_info),
+        "RF v2": lambda: tree_scores("random_forest_v2.joblib", features, transactions, indices, split_info),
         "XGBoost": lambda: tree_scores("xgboost_candidate.joblib", features, transactions, indices, split_info),
         CONTROL: lambda: same_data_xgb_scores(features, transactions, indices, split_info),
         "하이브리드": lambda: hybrid_scores(features, transactions, indices, split_info),
