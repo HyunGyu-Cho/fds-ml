@@ -78,6 +78,8 @@ generate_data ─▶ train_random_forest ─▶ train_xgboost ─┬─▶ train
 | 11 | `python export_ai_server_model.py --model models/random_forest_v2.joblib --version rf-v2 --cases ../ai-server/tests/fixtures/ml_golden.json` | 기본 | `exports/rf-v2.joblib`(압축 모델) · `exports/ml_golden_rf-v2.json`(golden 정답) — 팀 저장소 ai-server에 넣을 파일. 사례(대상 결제 · 이력)는 기존 golden에서 가져오고 정답만 이 모델로 다시 계산 (1 · 9번 필요, 팀 저장소 폴더 안에서 실행) |
 | 12 | `python tabformer_convert.py` | 기본 | 외부 데이터(IBM TabFormer) → `data/tabformer/transactions.csv` · `fraud_episodes.csv`. 기본: 고객 250명(seed 42) · 2015~2019년 · 1달러 1,300원 (아래 "외부 데이터" 절, 원본 필요) |
 | 13 | `python tabformer_scorecard.py` | 기본 | 외부 데이터 성적표 `reports/tabformer_scorecard.md` — Rule · RF(TabFormer로 학습, rf-v2와 같은 칸 · 설정) · RF + 지역 칸(확인 실험) · rf-v2(합성 학습 그대로)를 같은 헛경보 수에서 비교 (9 · 12번 필요) |
+| 14 | `python shadow_scenarios.py` | 기본 | 돈워리 로컬 서버(팀 저장소 실행 중)에 정상 · 사기 시나리오 결제 50건을 보내고 정답 라벨 `data/shadow/scenario_labels.csv`를 남김. 서명 · 전송은 팀 저장소 `scripts/demo/cakeshop_pay.py`를 그대로 씀 (`--dry-run`으로 목록만 보기) |
+| 15 | `python shadow_export.py` → `python shadow_whatif.py --labels data/shadow/scenario_labels.csv` | 기본 | 만약 비교 `reports/shadow_whatif.md` — Shadow 기록(`sql/shadow_export.sql` 결과 CSV)으로 Rule × ML 일치표 · 직원 판정 · 시나리오 라벨 대조 · 기준값 바꿔 보기 · 국가 공백 · 같은 결제 rf-v1 ↔ rf-v2 (아래 "Shadow 만약 비교" 절) |
 
 - 데이터는 거래 시각 순으로 Train 70% · Validation 15% · Test 15%로 나눕니다. 경계를 넘는 공격 사건은 평가 데이터에서 뺍니다(`split_and_purge`).
 - 같은 헛경보 기준: Validation 정상 거래 2,555건 중 50건까지만 헛경보를 허용하도록(`TARGET_FPR = 50 / 2555`) 모델마다 기준값을 맞춘 뒤 탐지 수를 비교합니다.
@@ -105,6 +107,21 @@ generate_data ─▶ train_random_forest ─▶ train_xgboost ─┬─▶ train
   - 정상 1.96% 헛경보에서 잡은 사기: Rule 14 · RF(TabFormer로 학습) 47 · RF + 지역 칸 57 · rf-v2(합성 학습 그대로) 8. AP는 무작위 0.0016 대비 RF 0.0146 · RF + 지역 칸 0.0169 · rf-v2 0.0021
   - 해석: TabFormer의 사기는 "어디서 · 무슨 업종에서"(평소와 다른 주 · 해외 사기율 37배)로 드러나는데, 우리 12칸은 행동 이력만 봐서 약하다. rf-v2가 무작위 수준인 것은 합성 데이터가 우리 Feature가 잡는 신호로 사기를 만들었기 때문 — 합성 성적표의 "Rule 대비 약 3.8배"는 우리가 설계한 사기 시나리오 안에서만 맞는 결론
   - 장소 칸("앞서 이 장소에서 결제한 적 있나")은 조금 도움(+10건). 돈워리에 "평소와 다른 접속 국가" 칸을 넣을지는 더 현실적인 합성 데이터로 다시 학습하는 v3 때 다시 본다
+
+### 돈워리 Shadow 만약 비교 (14 · 15번)
+
+- 목적: 팀 저장소 ai-server가 결제에 영향 없이 남긴 Shadow 기록(`ml_shadow_scores`)으로 "ML이 판정했다면 무엇이 달라졌나"를 본다. AI 조사 보고서에 ML 점수를 넣을지는 이 결과로 판단한다
+- 순서: 팀 저장소에서 Spring(`run-local.local.ps1 -MlShadow`) · ai-server 실행 → 14번 → 1~2분 기다림 → REVIEW 사건 몇 건을 화면에서 직접 판정 → `python shadow_export.py`(DB 비밀번호 입력)로 `data/shadow/shadow_export.csv` 만들기 — PC에 설치된 mariadb 클라이언트가 `sql/shadow_export.sql`을 실행하고 결과를 CSV로 바꿈(기본 127.0.0.1:3307 · root · donworry, 클라이언트는 PATH → `C:\Program Files\MariaDB *\bin` 순으로 찾음). HeidiSQL에서 실행해 CSV(머리글 포함)로 내보내도 됨 → 15번 `shadow_whatif.py`
+- 고위험 국가 시나리오(F3)는 로컬 DB `fds_high_risk_countries`에 `--risk-country`(기본 NG)가 있어야 Rule R05가 걸린다
+- 리포트에는 집계 숫자만 쓴다(손님 번호 · 이메일 · IP · 결제 번호 없음). 원본 CSV는 `data/`라 Git에 올라가지 않는다
+- 한계: 시연 · 시나리오 결제라 표본이 작고, 결제를 초 단위로 이어 보내 `minutesSinceLastTx`가 실제보다 작다
+- 결과 (11/03, `reports/shadow_whatif.md`, rf-v2 채점 99건 중 시나리오 50건)
+  - 시나리오 정상 27건: 헛경보 Rule 0 · ML 0. 사기 23건: Rule 의심 5 · ML HIGH 13 · 둘 다 놓침 10(고위험 국가 3 · 소액 반복 4 · 고액 연속 2 · 같은 카드 1)
+  - 일치표: Rule만 의심 0건 · ML만 의심 30건 — 이 기록에서 Rule이 잡은 결제는 ML도 모두 HIGH
+  - ML HIGH는 금액에 몰림(50만 원 이상 74% · 미만 20%). 소액 새 손님은 확률 0.00 — 예전 시연의 "새 손님마다 HIGH"는 60만 원 결제만 보내서 생긴 착시
+  - 해외 접속 5건 모두 ML LOW. 고위험 국가(NG) 사기는 Rule도 R05 40점(50점 미만)이라 통과 → 접속 국가 칸(v3) 근거
+  - 같은 결제 46건 rf-v1 ↔ rf-v2: HIGH · LOW 뒤집힘 0건(확률 차이 최대 0.07)
+  - 단서: 시나리오를 학습용 합성 데이터와 같은 발상으로 만들어 ML에 유리하다. 외부 데이터(TabFormer)에서 rf-v2는 무작위 수준이었다. 직원 판정 5건은 예전 시연 때 누른 판정이라 정답으로 약하다
 
 ## 5. 재현성
 
