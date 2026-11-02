@@ -1,0 +1,5 @@
+# 실험 설치: XGBoost · Isolation Forest 비교 · Transformer · 하이브리드
+-r requirements.txt
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.15.0+cpu
+xgboost==3.4.1
