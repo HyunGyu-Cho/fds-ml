@@ -6,7 +6,7 @@ ML_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ML_DIR))
 
 from ai_samples import Index, build_sample, export, has_rare_signal
-from score_ai_samples import build_report, grade
+from score_ai_samples import build_report, failure_reason, grade
 
 
 def tx(pid, day, customer, card, device, fraud="0", condition="NORMAL", result="APPROVED", country="KR"):
@@ -131,3 +131,11 @@ def test_report_counts_by_condition_and_compares_runs():
     assert "맞음 0 · 보류 1 · 위험한 놓침 1 · 잘못된 취소 0" in report
     assert "| 사기 · 해외 | 없음 | 1 | 0 | 0 | 1 | 0 |" in report
     assert "- a ↔ b: 0 / 1건" in report
+
+
+# 실패 이유는 stdout의 JSON에서 — stderr의 진행 로그를 이유로 적지 않는다
+def test_failure_reason_reads_stdout_json():
+    stdout = '{"code": "NARRATIVE_INVALID", "reason": "다시 써도 형식 검사 실패"}'
+
+    assert failure_reason(stdout, "조사 시작 · Case 1005") == "NARRATIVE_INVALID: 다시 써도 형식 검사 실패"
+    assert failure_reason("", "Traceback ... ConnectionError") == "Traceback ... ConnectionError"

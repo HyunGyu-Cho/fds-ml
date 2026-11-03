@@ -48,6 +48,15 @@ def read_csv(path: Path) -> list[dict]:
         return list(csv.DictReader(file))
 
 
+# run_report는 실패 이유를 stdout에 JSON({"code", "reason"})으로 찍는다 — stderr는 진행 로그라 이유가 아니다
+def failure_reason(stdout: str, stderr: str) -> str:
+    try:
+        error = json.loads(stdout)
+        return f"{error.get('code')}: {error.get('reason')}"[:300]
+    except (json.JSONDecodeError, AttributeError):
+        return (stderr or stdout).strip()[-300:]
+
+
 def run_one(sample: Path, ai_server: Path, python: str) -> dict:
     started = time.monotonic()
     try:
@@ -63,7 +72,7 @@ def run_one(sample: Path, ai_server: Path, python: str) -> dict:
         return {"status": "fail", "error": f"{TIMEOUT_SECONDS}초 초과", "seconds": f"{time.monotonic() - started:.1f}"}
     seconds = f"{time.monotonic() - started:.1f}"
     if done.returncode != 0:
-        return {"status": "fail", "error": (done.stderr or done.stdout).strip()[-300:], "seconds": seconds}
+        return {"status": "fail", "error": failure_reason(done.stdout, done.stderr), "seconds": seconds}
     report = json.loads(done.stdout)
     analyses = report.get("paymentAnalyses") or []
     return {
@@ -86,7 +95,7 @@ def run(label: str, ai_server: Path, python: str, limit: int | None, sample_dir:
         result = {"caseId": row["caseId"], "recommendation": "", "overall": "", **run_one(sample_dir / row["sampleFile"], ai_server, python)}
         done[row["caseId"]] = result
         answer = "사기" if row["fraudLabel"] == "1" else "정상"
-        shown = result["recommendation"] or result["error"][:60]
+        shown = result["recommendation"] or f"실패 — {result['error'][:120]}"
         print(f"[{number}/{len(labels)}] {label} · case {row['caseId']} ({answer}) → {shown} · {result['seconds']}초", flush=True)
         with result_path.open("w", encoding="utf-8", newline="") as file:
             writer = csv.DictWriter(file, fieldnames=RESULT_COLUMNS, lineterminator="\n")
