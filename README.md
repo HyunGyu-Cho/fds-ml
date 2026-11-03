@@ -83,6 +83,8 @@ generate_data ─▶ train_random_forest ─▶ train_xgboost ─┬─▶ train
 | 16 | `python generate_data_v3.py` | 기본 | v3 합성 데이터(Ⓥ3) `data/v3/transactions.csv`(접속 국가 `ipCountryCode` 칸 추가, IP 원본 없음) · `fraud_episodes.csv` · `conditions.csv`(결제별 상황 — 거래 파일과 분리해 학습에 섞이지 않게). 손님 10,000 · 정상 199,000 · 사기 1,000(0.5%) · seed 42, 기존 생성기 결과 위에 "정상인데 이상해 보임 · 해외인데 정상 · 평소 국가로 위장한 사기 · 해외 · 고위험 국가(NG) 사기"를 입힘 (비율은 실험용 가정). 1번 데이터는 바뀌지 않음 |
 | 17 | `python train_random_forest_v3.py` | 기본 | rf-v3(Ⓥ3) — 16번 데이터로 rf-v2와 같은 절차(칸 구성 2 × class_weight 2, Validation F1로 선정) · 칸은 v2 12칸 + `countryDiffersFromUsual`(평소 국가와 다른가, 이력 없으면 KR과 비교, 국가 없음 -1). `models/random_forest_v3.joblib`(+ `home_country`) · 참고 모델 `random_forest_v3_no_country.joblib`(같은 데이터 · 국가 칸 없음). 약 3~4분 |
 | 18 | `python compare_v2_v3.py` | 기본 | rf-v2(팀 ai-server 파일 그대로) vs rf-v3를 v3 Test에서 비교해 통과 기준 5개 자동 판정 → `reports/rf_v2_vs_v3.md`. 비교 지점은 Rule 보류(50점+, R05 켬 · 고위험 NG)와 같은 헛경보 수. `data/tabformer`가 있으면 기준 5(TabFormer AP)도 계산(오래 걸림), 없으면 `--skip-tabformer`처럼 보류 |
+| 19 | `python ai_samples.py` | 기본 | 16번 데이터의 REVIEW 결제(R05 켬 · 고위험 NG) 100건(정상 50 · 사기 50, 상황별 할당 · seed 42) → `exports/ai_samples/case-*.json`(팀 ai-server `measure_*.json` 형식) · `labels.csv`(정답 · 상황 · 드문 정황 여부). 정답은 샘플 JSON에 넣지 않음 (16번 필요) |
+| 20 | `python score_ai_samples.py --label <이름>` | 기본 | 19번 샘플을 팀 저장소 ai-server `run_report`로 하나씩 돌려 정답과 비교 → `exports/ai_samples/results-<이름>.csv` · 성적표 `reports/ai_recommendation_v3.md` (아래 "AI 권고 성적표" 절, 19번 · ai-server 필요) |
 
 - 데이터는 거래 시각 순으로 Train 70% · Validation 15% · Test 15%로 나눕니다. 경계를 넘는 공격 사건은 평가 데이터에서 뺍니다(`split_and_purge`).
 - 같은 헛경보 기준: Validation 정상 거래 2,555건 중 50건까지만 헛경보를 허용하도록(`TARGET_FPR = 50 / 2555`) 모델마다 기준값을 맞춘 뒤 탐지 수를 비교합니다.
@@ -112,6 +114,19 @@ generate_data ─▶ train_random_forest ─▶ train_xgboost ─┬─▶ train
   - 장소 칸("앞서 이 장소에서 결제한 적 있나")은 조금 도움(+10건). 돈워리에 "평소와 다른 접속 국가" 칸을 넣을지는 더 현실적인 합성 데이터로 다시 학습하는 v3 때 다시 본다
   - Ⓥ3 국가 칸 비교 (11/03): 장소를 국가 단위로 바꿔 비교한 결과 B "평소 국가와 다른가"를 고름. 정상 1.96% 헛경보에서 잡은 사기 A 51 · B 245/252, AP A 0.0359 · B 0.5080, Test 한 번 B 170/174 · AP 0.3875. TabFormer 사기가 해외 매장 결제에 몰린 합성 데이터라 크게 보이고, 온라인 결제(사기 9건)에서는 효과가 없음 → 돈워리(전부 온라인) 성능의 근거는 아님
   - Ⓥ3 rf-v3 (11/03, `reports/rf_v2_vs_v3.md`): ❌ 불통과 → v2 유지. 같은 헛경보에서 잡은 사기 v2 138 → v3 170, 해외 사기 65% → 99%로 늘었지만 해외 여행 중 정상의 50%에 경보가 나 기준 3(해외 정상 헛경보 10% 이하)을 넘지 못함. TabFormer AP 개선(0.0021 → 0.2291)은 국가 칸 덕이고 국가 칸 없는 v3는 0.0017(무작위 수준) — "평소 국가와 다른가" 하나로는 여행과 해외 공격을 못 가름
+
+### AI 권고 성적표 (19 · 20번)
+
+- 목적: 팀 저장소 ai-server의 AI 조사 보고서 권고(승인 취소 검토 · 추가 확인 필요 · 매입 진행 검토)가 정답과 얼마나 맞는지 상황별로 본다 (팀 이슈 #479 · #490 기준 조정의 효과 확인)
+- 채점: 사기에 매입 진행 = 위험한 놓침, 정상에 승인 취소 = 잘못된 취소, 추가 확인 = 보류(따로 셈). 흔한 신호(새 기기 · 새 카드 · 해외 접속 · 고액)만 있는 사기는 #490 기준상 추가 확인이 맞는 답
+- 샘플 만드는 방법: 결제 · FDS 근거(`rule_engine.py`, Spring과 같은 규칙 이름 · 문장) · 고객 최근 결제(앞선 30일 · 최대 20건) · 같은 카드 · 기기를 쓴 다른 고객(앞선 30일)
+  - 지난 보류 결제는 사기 · 정상 모두 "만료"(24시간 자동 취소)로 보여 정답이 새지 않게 함
+  - 비슷한 과거 사건은 직원 판정(곧 정답)이 필요해 비워 둠, IP 원문이 없어 같은 IP 비교는 "정보 없음"
+- 실행 (fds-ml 폴더, ai-server 가상환경을 켠 창 — 기본 ai-server 위치는 `../ai-server`)
+  - `python ai_samples.py`
+  - Ollama: `$env:AI_SERVER_LLM_PROVIDER = "ollama"` → `python score_ai_samples.py --label ollama-1 --limit 5`(1건 시간 재기) → `python score_ai_samples.py --label ollama-1`(이미 끝난 건은 건너뜀)
+  - OpenAI: `$env:AI_SERVER_LLM_PROVIDER = "openai"` · 키 설정 → `python score_ai_samples.py --label openai-1` (100건 약 1,800원)
+  - 성적표만 다시: `python score_ai_samples.py`
 
 ### 돈워리 Shadow 만약 비교 (14 · 15번)
 
